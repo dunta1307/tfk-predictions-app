@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import NavLink from '@/components/NavLink';
 import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
 
@@ -33,9 +34,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       </header>
       <nav className="tabs">
         <div className="tabs-inner">
-          <Link href="/predictions" className="tab on">Predictions</Link>
-          <span className="tab soon">Leaderboard · Phase 2</span>
-          <span className="tab soon">Results · Phase 2</span>
+          <NavLink href="/predictions">Predictions</NavLink>
+          <NavLink href="/leaderboard">Leaderboard</NavLink>
+          <NavLink href="/results">Results</NavLink>
         </div>
       </nav>
       <main>{children}</main>

@@ -45,5 +45,8 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
+  // NOTE: `api` must stay in this exclusion list. API routes do their own auth
+  // (the fixture sync checks CRON_SECRET), and if middleware guards them it
+  // redirects machine requests to the login page instead of running them.
   matcher: ['/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)']
 };
