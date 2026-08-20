@@ -8,7 +8,7 @@ export const metadata = { title: 'Leaderboard · TFK Predictions League' };
 
 type View = 'overall' | 'monthly' | 'gw';
 interface Row {
-  user_id: string; display_name: string;
+  user_id: string; display_name: string; is_bot: boolean;
   points: number; exact_count: number; outcome_count: number; rank: number;
 }
 
@@ -52,21 +52,21 @@ export default async function LeaderboardPage(
   if (view === 'overall') {
     const { data } = await supabase
       .from('v_leaderboard_overall')
-      .select('user_id, display_name, points, exact_count, outcome_count, rank')
+      .select('user_id, display_name, is_bot, points, exact_count, outcome_count, rank')
       .order('rank');
     rows = (data ?? []) as Row[];
     caption = `Season standings after Gameweek ${publishedGws[publishedGws.length - 1]}`;
   } else if (view === 'monthly') {
     const { data } = await supabase
       .from('v_leaderboard_monthly')
-      .select('user_id, display_name, points, exact_count, outcome_count, rank')
+      .select('user_id, display_name, is_bot, points, exact_count, outcome_count, rank')
       .eq('month_key', activeMonth).order('rank');
     rows = (data ?? []) as Row[];
     caption = `${monthLabel(activeMonth)} — points earned this month only`;
   } else {
     const { data } = await supabase
       .from('v_leaderboard_gameweek')
-      .select('user_id, display_name, points, exact_count, outcome_count, rank')
+      .select('user_id, display_name, is_bot, points, exact_count, outcome_count, rank')
       .eq('gameweek', activeGw).order('rank');
     rows = (data ?? []) as Row[];
     caption = `Gameweek ${activeGw} only. Maximum possible is 44.`;
@@ -135,7 +135,8 @@ export default async function LeaderboardPage(
                   <td>
                     <div className="plname">
                       <span>{r.display_name}</span>
-                      {r.rank === 1 && <span className="pill amber">Leader</span>}
+                      {r.is_bot && <span className="pill grey">Bot</span>}
+                      {r.rank === 1 && !r.is_bot && <span className="pill amber">Leader</span>}
                       {r.user_id === user.id && <span className="pill teal">You</span>}
                     </div>
                   </td>
@@ -148,6 +149,11 @@ export default async function LeaderboardPage(
           </table>
         </div>
         <div className="card-bd" style={{ borderTop: '1px solid var(--line)', fontSize: 12.5, color: 'var(--muted)' }}>
+          {rows.some((r) => r.is_bot) && (
+            <><strong>The bot</strong> plays under the same deadline as everyone else but is not
+            eligible for the monthly cash prize — if it tops a month, the money goes to the leading
+            human. <br /></>
+          )}
           Ties break on most exact scores, then most correct outcomes.
           <strong> Exact</strong> means the scoreline called spot on; <strong>Outcome</strong> means
           the right result but the wrong scoreline.

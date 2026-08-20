@@ -87,3 +87,52 @@ export async function invitePlayer(email: string): Promise<Result> {
   revalidatePath('/admin/players');
   return { ok: true, message: `Invite sent to ${trimmed}` };
 }
+
+/* -------------------------------------------------------------- bot ---- */
+
+/**
+ * Creates the bot's player account. It is a real auth user with a random
+ * password nobody knows — it never signs in, it is written to directly by the
+ * scheduled job. Opted out of email, flagged as a bot so leaderboards can mark
+ * it and the cash prize can skip it.
+ */
+export async function createBot(displayName: string): Promise<Result> {
+  if (!(await isAdmin())) return { ok: false, error: 'Admins only.' };
+  const name = displayName.trim() || 'The Algorithm';
+
+  const db = createAdminClient();
+
+  const { data: existing } = await db.from('profiles').select('id').eq('is_bot', true).maybeSingle();
+  if (existing) return { ok: false, error: 'A bot already exists.' };
+
+  const password = crypto.randomUUID() + crypto.randomUUID();
+  const { data: created, error } = await db.auth.admin.createUser({
+    email: 'bot@tfkpredictions.com',
+    password,
+    email_confirm: true,
+    user_metadata: { display_name: name, email_optin: false }
+  });
+  if (error) return { ok: false, error: error.message };
+  if (!created.user) return { ok: false, error: 'Account not created.' };
+
+  const { error: pErr } = await db.from('profiles').update({
+    display_name: name, is_bot: true, is_active: true, email_optin: false
+  }).eq('id', created.user.id);
+  if (pErr) return { ok: false, error: pErr.message };
+
+  revalidatePath('/admin');
+  revalidatePath('/admin/players');
+  return { ok: true, message: `${name} has joined the league` };
+}
+
+export async function removeBot(): Promise<Result> {
+  if (!(await isAdmin())) return { ok: false, error: 'Admins only.' };
+  const db = createAdminClient();
+  const { data: bot } = await db.from('profiles').select('id').eq('is_bot', true).maybeSingle();
+  if (!bot) return { ok: false, error: 'No bot to remove.' };
+  const { error } = await db.auth.admin.deleteUser(bot.id);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath('/admin');
+  revalidatePath('/admin/players');
+  return { ok: true, message: 'Bot removed, along with all its predictions' };
+}

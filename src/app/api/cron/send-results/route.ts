@@ -40,16 +40,23 @@ export async function GET(request: NextRequest) {
     const gw: number = target.gameweek;
 
     // One pass over the data — every scored total, every player, every gameweek.
-    const [{ data: people }, { data: totals }, { data: allGws }] = await Promise.all([
+    const [{ data: people }, { data: totals }, { data: allGws }, { data: everyone }] = await Promise.all([
       db.rpc('league_emails'),
       db.from('v_gameweek_totals').select('gameweek, user_id, points, exact_count, outcome_count'),
-      db.from('gameweeks').select('id, month_key, status').order('id')
+      db.from('gameweeks').select('id, month_key, status').order('id'),
+      // Names for the tables, which must include the bot even though it is
+      // never a recipient. Otherwise it shows up as "Unknown" in the standings.
+      db.from('profiles').select('id, display_name, is_bot')
     ]);
 
     if (!people?.length) return NextResponse.json({ ok: true, sent: 0, reason: 'no players' });
 
     const names = new Map<string, string>(
-      people.map((p: { user_id: string; display_name: string }) => [p.user_id, p.display_name])
+      (everyone ?? []).map((p: { id: string; display_name: string }) => [p.id, p.display_name])
+    );
+    const botIds = new Set(
+      (everyone ?? []).filter((p: { is_bot: boolean }) => p.is_bot)
+        .map((p: { id: string }) => p.id)
     );
     const rows = (totals ?? []) as GwTotal[];
 
@@ -73,7 +80,13 @@ export async function GET(request: NextRequest) {
 
     const gwWinners = gwTable.filter((r) => r.rank === 1);
     const gwWinnerPoints = gwWinners[0]?.points ?? 0;
-    const monthWinners = monthComplete ? monthTable.filter((r) => r.rank === 1) : null;
+    // The cash prize goes to the leading human. The bot can top the table and
+    // will be shown doing so, but it never takes the money.
+    const monthHumans = monthTable.filter((r) => !botIds.has(r.user_id));
+    const monthWinners = monthComplete && monthHumans.length
+      ? monthHumans.filter((r) => r.points === monthHumans[0].points
+          && r.exact === monthHumans[0].exact && r.outcome === monthHumans[0].outcome)
+      : null;
     const seasonTop = seasonNow.slice(0, TOP_N);
     const monthTop = monthTable.slice(0, MONTH_TOP_N);
 

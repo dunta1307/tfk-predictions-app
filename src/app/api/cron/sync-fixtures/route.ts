@@ -83,6 +83,8 @@ export async function GET(request: NextRequest) {
       away_score: f.team_a_score,
       finished: f.finished || f.finished_provisional,
       postponed: false,
+      home_difficulty: f.team_h_difficulty,
+      away_difficulty: f.team_a_difficulty,
       updated_at: new Date().toISOString()
     }));
     const { error: fxErr } = await db.from('fixtures').upsert(rows);

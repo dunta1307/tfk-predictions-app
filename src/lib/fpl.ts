@@ -21,6 +21,8 @@ export interface FplFixture {
   team_a_score: number | null;
   finished: boolean;
   finished_provisional: boolean;
+  team_h_difficulty: number | null;
+  team_a_difficulty: number | null;
 }
 
 async function get<T>(path: string): Promise<T> {
