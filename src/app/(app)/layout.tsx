@@ -9,7 +9,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (!user) redirect('/login');
 
   const { data: profile } = await supabase
-    .from('profiles').select('display_name, is_admin').eq('id', user.id).single();
+    .from('profiles').select('display_name, is_admin, is_active').eq('id', user.id).single();
+
+  // A deactivated player keeps their history but cannot use the app.
+  if (profile && profile.is_active === false) redirect('/deactivated');
 
   const name = profile?.display_name ?? user.email ?? 'Player';
   const initials = name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
@@ -38,6 +41,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <NavLink href="/leaderboard">Leaderboard</NavLink>
           <NavLink href="/results">Results</NavLink>
           <NavLink href="/settings">Settings</NavLink>
+          {profile?.is_admin && <NavLink href="/admin">Admin</NavLink>}
         </div>
       </nav>
       <main>{children}</main>

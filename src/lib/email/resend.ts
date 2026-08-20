@@ -46,3 +46,36 @@ export async function sendEmail(opts: {
     return { ok: false, error: err instanceof Error ? err.message : 'Send failed' };
   }
 }
+
+
+export interface SentEmail {
+  id: string;
+  to: string[];
+  subject: string;
+  created_at: string;
+  last_event?: string;   // delivered | bounced | complained | opened | ...
+}
+
+/**
+ * The last N emails Resend has on record, with delivery status.
+ *
+ * Our email_log says what we asked to send; this says what actually happened
+ * to it. Returns an empty list rather than throwing, so a Resend outage
+ * degrades the admin page instead of breaking it.
+ */
+export async function listSentEmails(limit = 25): Promise<{ ok: boolean; emails: SentEmail[]; error?: string }> {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) return { ok: false, emails: [], error: 'RESEND_API_KEY is not set' };
+  try {
+    const res = await fetch(`https://api.resend.com/emails?limit=${Math.min(limit, 100)}`, {
+      headers: { Authorization: `Bearer ${key}` },
+      cache: 'no-store'
+    });
+    if (!res.ok) return { ok: false, emails: [], error: `Resend returned ${res.status}` };
+    const body = await res.json();
+    const rows = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
+    return { ok: true, emails: rows as SentEmail[] };
+  } catch (err) {
+    return { ok: false, emails: [], error: err instanceof Error ? err.message : 'Lookup failed' };
+  }
+}
