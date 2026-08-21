@@ -3,6 +3,7 @@ import { sendEmail } from '@/lib/email/resend';
 import { unsubscribeUrl } from '@/lib/email/tokens';
 import { reminderHtml, reminderText, reminderSubject, type ReminderData } from '@/lib/email/reminder';
 import { resultsHtml, resultsText, resultsSubject, type ResultsData } from '@/lib/email/results';
+import { revealHtml, revealText, revealSubject, type RevealData } from '@/lib/email/reveal';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,7 +15,7 @@ export const dynamic = 'force-dynamic';
  * with an audience of one.
  *
  *   /api/cron/test-email?secret=...&to=you@email.com&kind=reminder_24h
- *   kind = reminder_24h | reminder_1h | results
+ *   kind = reminder_24h | reminder_1h | results | reveal
  *
  * Writes nothing to the database and touches no real player data.
  */
@@ -39,7 +40,31 @@ export async function GET(request: NextRequest) {
 
   let subject: string, html: string, text: string;
 
-  if (kind === 'results') {
+  if (kind === 'reveal') {
+    const who = ['Donnacha M','Ste Cash','Chalky','Kez Doyle','Big Dave','Marto','Aoife K','The Algorithm'];
+    const mk = (fid: number, h: string, a: string, ko: string, scores: [number, number][], capIdx: number) => ({
+      fixture_id: fid, homeName: h, awayName: a, kickoffText: ko,
+      picks: scores.map((s, i) => ({
+        user_id: i === 0 ? fakeId : `u${i}`, name: who[i] ?? `Player ${i}`,
+        isBot: who[i] === 'The Algorithm', home: s[0], away: s[1], isCaptain: i === capIdx
+      }))
+    });
+    const d: RevealData = {
+      name: 'Test Account', meId: fakeId, gameweek: 3,
+      deadlineText: 'Fri 4 Sep, 20:00', players: 8,
+      fixtures: [
+        mk(1, 'Ipswich Town', 'Liverpool', '20:00',
+           [[0,2],[0,2],[1,2],[0,1],[0,2],[1,1],[0,3],[0,2]], 0),
+        mk(2, 'Newcastle', 'Bournemouth', '12:30',
+           [[2,1],[2,0],[2,1],[1,1],[3,1],[2,1],[2,0],[2,1]], 3),
+        mk(3, 'Man City', 'Coventry City', '15:00',
+           [[3,0],[4,0],[3,0],[2,0],[3,1],[3,0],[5,0],[3,0]], 5)
+      ],
+      appUrl: site, unsubscribeUrl: unsubscribeUrl(fakeId, site)
+    };
+    subject = `[TEST] ${revealSubject(d)}`;
+    html = revealHtml(d); text = revealText(d);
+  } else if (kind === 'results') {
     const d: ResultsData = {
       name: 'Test Account', gameweek: 3, monthLabel: 'September 2026',
       monthComplete: false, monthGwsLeft: 2,

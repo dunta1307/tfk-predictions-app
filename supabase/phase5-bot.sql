@@ -16,8 +16,17 @@ alter table fixtures add column if not exists away_difficulty int;
 -- ---------------------------------------------------------------------
 -- Leaderboards: carry the flag so the UI can mark it, and so the cash
 -- prize can skip it without a second query.
+--
+-- These are DROPped rather than replaced. "create or replace view" cannot
+-- change the position of an existing column, and adding is_bot in third
+-- place shifts everything after it. Nothing depends on these three views
+-- inside the database, so dropping them is safe.
 -- ---------------------------------------------------------------------
-create or replace view v_leaderboard_overall with (security_invoker = true) as
+drop view if exists v_leaderboard_overall;
+drop view if exists v_leaderboard_monthly;
+drop view if exists v_leaderboard_gameweek;
+
+create view v_leaderboard_overall with (security_invoker = true) as
 select t.user_id, pr.display_name, pr.is_bot,
        sum(t.points)::int as points,
        sum(t.exact_count)::int as exact_count,
@@ -29,7 +38,7 @@ join gameweeks g on g.id = t.gameweek and g.status = 'published'
 join profiles  pr on pr.id = t.user_id
 group by t.user_id, pr.display_name, pr.is_bot;
 
-create or replace view v_leaderboard_monthly with (security_invoker = true) as
+create view v_leaderboard_monthly with (security_invoker = true) as
 select g.month_key, t.user_id, pr.display_name, pr.is_bot,
        sum(t.points)::int as points,
        sum(t.exact_count)::int as exact_count,
@@ -41,7 +50,7 @@ join gameweeks g on g.id = t.gameweek and g.status = 'published'
 join profiles  pr on pr.id = t.user_id
 group by g.month_key, t.user_id, pr.display_name, pr.is_bot;
 
-create or replace view v_leaderboard_gameweek with (security_invoker = true) as
+create view v_leaderboard_gameweek with (security_invoker = true) as
 select t.gameweek, t.user_id, pr.display_name, pr.is_bot,
        t.points, t.exact_count, t.outcome_count,
        rank() over (partition by t.gameweek
@@ -131,7 +140,7 @@ select cron.schedule(
   '2-59/10 * * * *',
   $$
   select net.http_get(
-    url := 'https://tfkpredictions.com/api/cron/bot-predictions?secret=278aa98d3d3791990e684724c5388b95c98bf1ec4493572b',
+    url := 'https://YOUR_DOMAIN/api/cron/bot-predictions?secret=YOUR_CRON_SECRET',
     timeout_milliseconds := 30000
   );
   $$

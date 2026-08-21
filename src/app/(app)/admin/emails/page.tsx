@@ -9,7 +9,8 @@ export const metadata = { title: 'Emails · Admin' };
 const LABEL: Record<string, string> = {
   reminder_24h: '24-hour reminder',
   reminder_1h: '1-hour reminder',
-  results: 'Results round-up'
+  results: 'Results round-up',
+  reveal: 'Pre-match reveal'
 };
 
 function statusPill(event?: string) {
