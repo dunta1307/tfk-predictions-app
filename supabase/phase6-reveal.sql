@@ -113,7 +113,7 @@ select cron.schedule(
   $$
   select net.http_get(
     url := 'https://YOUR_DOMAIN/api/cron/send-reveal?secret=YOUR_CRON_SECRET',
-    timeout_milliseconds := 45000
+    timeout_milliseconds := 45000 
   );
   $$
 );
