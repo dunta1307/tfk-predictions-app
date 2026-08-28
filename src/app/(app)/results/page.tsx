@@ -63,6 +63,14 @@ export default async function ResultsPage(
 
   const settled = board.filter((f) => f.finished || f.postponed).length;
   const captainFixture = board.find((f) => f.id === captain);
+
+  /**
+   * Points only exist once the WHOLE gameweek has been scored — scoring runs
+   * when the last match is settled. Until then a finished fixture has a result
+   * but no points row, and it must not be shown as a miss.
+   */
+  const isScored = current.status === 'published';
+  const awaiting = !isScored && settled > 0;
   let lastDay = '';
 
   return (
@@ -70,9 +78,21 @@ export default async function ResultsPage(
       <h1 className="page">Gameweek {current.id} results</h1>
       <p className="sub">
         {settled}/{board.length} matches settled
-        {current.status === 'published' ? ' · scored and published' : ' · scoring when the last match finishes'}
+        {isScored ? ' · scored and published' : ' · points land when the last match finishes'}
         {' · counts towards '}{monthLabel(current.month_key)}
       </p>
+
+      {awaiting && (
+        <div className="notice info" style={{ marginBottom: 16 }}>
+          <div>
+            <strong>Not scored yet.</strong> Points are worked out once every match in the Gameweek
+            is done — the last one here is {board.filter((f) => !f.finished && !f.postponed)
+              .map((f) => `${f.home_name} v ${f.away_name}`).slice(-1)[0] ?? 'still to play'}.
+            Your results show below as they finish, but the points column stays blank until then.
+            Nothing is lost.
+          </div>
+        </div>
+      )}
 
       <div className="gwsel" style={{ marginBottom: 16 }}>
         {gameweeks.map((g) => (
@@ -82,9 +102,12 @@ export default async function ResultsPage(
 
       <div className="card"><div className="card-bd">
         <div className="statgrid">
-          <div className="stat"><div className="k">GW{current.id} points</div><div className="v">{totals.points}</div></div>
-          <div className="stat"><div className="k">Exact scores</div><div className="v">{totals.exact}</div></div>
-          <div className="stat"><div className="k">Correct outcomes</div><div className="v">{totals.outcome}</div></div>
+          <div className="stat"><div className="k">GW{current.id} points</div>
+            <div className="v">{isScored ? totals.points : <span style={{ fontSize: 15, color: 'var(--muted)' }}>after the GW</span>}</div></div>
+          <div className="stat"><div className="k">Exact scores</div>
+            <div className="v">{isScored ? totals.exact : <span style={{ fontSize: 15, color: 'var(--muted)' }}>—</span>}</div></div>
+          <div className="stat"><div className="k">Correct outcomes</div>
+            <div className="v">{isScored ? totals.outcome : <span style={{ fontSize: 15, color: 'var(--muted)' }}>—</span>}</div></div>
           <div className="stat"><div className="k">Captain</div>
             <div className="v" style={{ fontSize: 15, lineHeight: 1.7 }}>
               {captainFixture ? `${captainFixture.home_name} v ${captainFixture.away_name}` : 'Not set'}
@@ -105,11 +128,13 @@ export default async function ResultsPage(
             ? <span className="pill grey">Postponed · void</span>
             : !f.finished
               ? <span className="pill grey">To play</span>
-              : s?.exact
-                ? <span className="pill teal">Exact</span>
-                : s?.outcome_only
-                  ? <span className="pill amber">Outcome</span>
-                  : <span className="pill grey">Miss</span>;
+              : !s
+                ? <span className="pill teal">Awaiting scoring</span>
+                : s.exact
+                  ? <span className="pill teal">Exact</span>
+                  : s.outcome_only
+                    ? <span className="pill amber">Outcome</span>
+                    : <span className="pill grey">Miss</span>;
 
           return (
             <div key={f.id}>
@@ -136,7 +161,7 @@ export default async function ResultsPage(
                 </div>
                 <div style={{ textAlign: 'right' }}>
                   <div className={`pts${s && s.points > 0 ? ' hit' : ' zero'}`}>
-                    {f.finished && !f.postponed ? `+${s?.points ?? 0}` : '—'}
+                    {f.postponed || !f.finished || !s ? '—' : `+${s.points}`}
                   </div>
                   <div style={{ marginTop: 3 }}>{tag}</div>
                 </div>

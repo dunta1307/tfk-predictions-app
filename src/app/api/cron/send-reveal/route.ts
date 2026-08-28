@@ -29,26 +29,49 @@ export async function GET(request: NextRequest) {
   const db = createAdminClient();
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://tfkpredictions.com';
   const now = new Date();
+  const url = new URL(request.url);
+
+  /**
+   * Preview mode: ?preview=1&to=you@email.com
+   *
+   * Sends the real thing, with real predictions, to ONE address regardless of
+   * the send window. Writes nothing to email_log, so the scheduled run later
+   * is unaffected and everyone still gets theirs at the proper time.
+   */
+  const previewTo = url.searchParams.get('preview') === '1'
+    ? url.searchParams.get('to')
+    : null;
+  if (url.searchParams.get('preview') === '1' && !previewTo?.includes('@')) {
+    return NextResponse.json({ error: 'Preview needs &to=your@email.com' }, { status: 400 });
+  }
 
   try {
     const { data: gameweeks } = await db
       .from('gameweeks').select('id, deadline')
       .gt('deadline', now.toISOString()).order('deadline').limit(2);
 
-    const target = (gameweeks ?? []).find((g) => {
-      const mins = (new Date(g.deadline).getTime() - now.getTime()) / 60000;
-      return mins > 0 && mins <= REVEAL_WINDOW_MINUTES;
-    });
+    const target = previewTo
+      ? (gameweeks ?? [])[0]                       // next gameweek, whenever it is
+      : (gameweeks ?? []).find((g) => {
+          const mins = (new Date(g.deadline).getTime() - now.getTime()) / 60000;
+          return mins > 0 && mins <= REVEAL_WINDOW_MINUTES;
+        });
     if (!target) {
       return NextResponse.json({ ok: true, sent: 0, reason: 'not inside the reveal window' });
     }
 
-    const [{ data: targets, error: tErr }, { data: rows, error: rErr }] = await Promise.all([
+    const [{ data: liveTargets, error: tErr }, { data: rows, error: rErr }] = await Promise.all([
       db.rpc('reveal_targets', { p_gameweek: target.id }),
       db.rpc('reveal_data', { p_gameweek: target.id })
     ]);
     if (tErr) throw tErr;
     if (rErr) throw rErr;
+
+    // In preview mode the recipient list is exactly one person: you.
+    const targets = previewTo
+      ? [{ user_id: 'preview', email: previewTo, display_name: 'Preview' }]
+      : liveTargets;
+
     if (!targets?.length) {
       return NextResponse.json({ ok: true, sent: 0, gameweek: target.id, reason: 'nobody eligible' });
     }
@@ -79,12 +102,14 @@ export async function GET(request: NextRequest) {
     const failures: string[] = [];
 
     for (const t of targets as { user_id: string; email: string; display_name: string }[]) {
-      const { error: claimErr } = await db.from('email_log')
-        .insert({ user_id: t.user_id, gameweek: target.id, kind: 'reveal' });
-      if (claimErr) continue;
+      if (!previewTo) {
+        const { error: claimErr } = await db.from('email_log')
+          .insert({ user_id: t.user_id, gameweek: target.id, kind: 'reveal' });
+        if (claimErr) continue;
+      }
 
       const data: RevealData = {
-        name: t.display_name,
+        name: previewTo ? 'Donnacha' : t.display_name,
         meId: t.user_id,
         gameweek: target.id,
         deadlineText: fmtKickoff(target.deadline),
@@ -96,7 +121,7 @@ export async function GET(request: NextRequest) {
 
       const res = await sendEmail({
         to: t.email,
-        subject: revealSubject(data),
+        subject: previewTo ? `[PREVIEW] ${revealSubject(data)}` : revealSubject(data),
         html: revealHtml(data),
         text: revealText(data),
         unsubscribeUrl: data.unsubscribeUrl
@@ -104,19 +129,22 @@ export async function GET(request: NextRequest) {
 
       if (res.ok) {
         sent++;
-        if (res.id) {
+        if (res.id && !previewTo) {
           await db.from('email_log').update({ provider_id: res.id })
             .eq('user_id', t.user_id).eq('gameweek', target.id).eq('kind', 'reveal');
         }
       } else {
-        await db.from('email_log').delete()
-          .eq('user_id', t.user_id).eq('gameweek', target.id).eq('kind', 'reveal');
+        if (!previewTo) {
+          await db.from('email_log').delete()
+            .eq('user_id', t.user_id).eq('gameweek', target.id).eq('kind', 'reveal');
+        }
         failures.push(`${t.email}: ${res.error}`);
       }
     }
 
     return NextResponse.json({
-      ok: true, gameweek: target.id, eligible: targets.length, sent,
+      ok: true, preview: !!previewTo,
+      gameweek: target.id, eligible: targets.length, sent,
       playersShown: players, fixtures: fixtures.length,
       failures: failures.length ? failures : undefined
     });
