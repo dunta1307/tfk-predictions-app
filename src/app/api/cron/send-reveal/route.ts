@@ -99,13 +99,29 @@ export async function GET(request: NextRequest) {
     const players = new Set((rows ?? []).map((r: { user_id: string }) => r.user_id)).size;
 
     let sent = 0;
+    let alreadySent = 0;
     const failures: string[] = [];
+    const claimErrors: string[] = [];
 
     for (const t of targets as { user_id: string; email: string; display_name: string }[]) {
       if (!previewTo) {
         const { error: claimErr } = await db.from('email_log')
           .insert({ user_id: t.user_id, gameweek: target.id, kind: 'reveal' });
-        if (claimErr) continue;
+        if (claimErr) {
+          /**
+           * A duplicate key is the normal case — this person already had it.
+           * ANYTHING ELSE is a real fault and must not be swallowed. The
+           * original version skipped silently on every error, which meant a
+           * constraint problem looked identical to "already sent" and the
+           * endpoint reported sent:0 with nothing wrong. That hid this bug
+           * for two gameweeks.
+           */
+          const duplicate = claimErr.code === '23505'
+            || /duplicate key/i.test(claimErr.message ?? '');
+          if (duplicate) { alreadySent++; continue; }
+          claimErrors.push(`${t.email}: ${claimErr.message}`);
+          continue;
+        }
       }
 
       const data: RevealData = {
@@ -142,12 +158,23 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    const blocked = claimErrors.length > 0;
     return NextResponse.json({
-      ok: true, preview: !!previewTo,
-      gameweek: target.id, eligible: targets.length, sent,
-      playersShown: players, fixtures: fixtures.length,
-      failures: failures.length ? failures : undefined
-    });
+      ok: !blocked,
+      preview: !!previewTo,
+      gameweek: target.id,
+      eligible: targets.length,
+      sent,
+      alreadySent,
+      playersShown: players,
+      fixtures: fixtures.length,
+      failures: failures.length ? failures : undefined,
+      // Surfaced loudly rather than swallowed — this is what went wrong before.
+      claimErrors: blocked ? claimErrors.slice(0, 5) : undefined,
+      hint: blocked
+        ? 'Could not write to email_log. Check the email_log_kind_check constraint allows the value reveal.'
+        : undefined
+    }, { status: blocked ? 500 : 200 });
   } catch (err) {
     console.error('[send-reveal]', err);
     return NextResponse.json(

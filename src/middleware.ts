@@ -6,28 +6,23 @@ type CookieToSet = { name: string; value: string; options: CookieOptions };
 const PUBLIC = ['/login', '/register', '/auth', '/unsubscribe', '/deactivated'];
 
 /**
- * Middleware must never be the slow part of a page load.
+ * Auth check, timeboxed.
  *
- * supabase.auth.getUser() makes a NETWORK CALL to Supabase's auth server on
- * every single request. When that server is slow, the middleware hangs and
- * Vercel kills the request at 25 seconds — a 504 on a site that is otherwise
- * fine. That is what was happening.
+ * The 504s were caused by supabase.auth.getUser() making a network call on
+ * every request and occasionally not answering. Vercel kills middleware at
+ * 25 seconds, so a slow auth server took the whole site down.
  *
- * So:
- *   1. getClaims() verifies the JWT locally, no network call in the normal case.
- *   2. getUser() is only called when the token is close to expiring and
- *      genuinely needs refreshing.
- *   3. Everything is timeboxed. If auth is slow we let the request through
- *      rather than hanging.
+ * The fix is ONLY the timeout. An earlier attempt swapped in getClaims() for
+ * local JWT verification, which is faster in theory but broke sign-in, so it
+ * has been reverted. getUser() is also what refreshes the session cookie —
+ * without it in middleware, people get silently logged out after an hour.
  *
- * Point 3 is safe because middleware is only a fast pre-filter for redirects.
- * The real gate is unchanged: every page calls getUser() in its server
- * component and redirects, and the database enforces row level security
- * regardless. Nobody sees another player's predictions because middleware
- * waved them past.
+ * If auth does not answer within 4 seconds we let the request through rather
+ * than hanging. That is safe: middleware is a fast pre-filter for redirects,
+ * and the real gate is unchanged — every page calls getUser() in its server
+ * component and redirects, with row level security underneath.
  */
-const AUTH_TIMEOUT_MS = 3000;
-const REFRESH_IF_EXPIRING_WITHIN_S = 300;   // 5 minutes
+const AUTH_TIMEOUT_MS = 4000;
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -50,12 +45,14 @@ export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const isPublic = PUBLIC.some((p) => path.startsWith(p));
 
-  let signedIn: boolean | null = null;   // null = we could not tell in time
-
+  // null means "could not tell in time" — fail open and let the page decide.
+  let signedIn: boolean | null = null;
   try {
-    signedIn = await withTimeout(resolveSignedIn(supabase), AUTH_TIMEOUT_MS);
+    signedIn = await withTimeout(
+      supabase.auth.getUser().then(({ data }) => !!data.user),
+      AUTH_TIMEOUT_MS
+    );
   } catch {
-    // Auth was slow or errored. Fail open — the page will do the real check.
     signedIn = null;
   }
 
@@ -75,39 +72,19 @@ export async function middleware(request: NextRequest) {
   return response;
 }
 
-type SupabaseClient = ReturnType<typeof createServerClient>;
-
-async function resolveSignedIn(supabase: SupabaseClient): Promise<boolean> {
-  // Fast path: verify the JWT locally.
-  try {
-    const { data } = await supabase.auth.getClaims();
-    const claims = data?.claims as { sub?: string; exp?: number } | undefined;
-    if (claims?.sub) {
-      const secondsLeft = claims.exp ? claims.exp - Math.floor(Date.now() / 1000) : 0;
-      if (secondsLeft > REFRESH_IF_EXPIRING_WITHIN_S) return true;
-      // Close to expiry — fall through so getUser() refreshes the cookie.
-    } else if (claims === null || claims === undefined) {
-      // No usable token at all; confirm with the slower call below.
-    }
-  } catch {
-    // getClaims unavailable (older project keys) — fall back.
-  }
-
-  const { data: { user } } = await supabase.auth.getUser();
-  return !!user;
-}
-
+/** Races a promise against a timer, and always clears the timer. */
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<T>((_, reject) => setTimeout(() => reject(new Error('auth timeout')), ms))
-  ]);
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('auth timeout')), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
 export const config = {
   // `api` must stay excluded — API routes do their own auth, and middleware
   // would redirect machine requests to the login page instead of running them.
   matcher: [
-    '/((?!api|_next/static|_next/image|_next/data|favicon.ico|robots.txt|sitemap.xml|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js|woff|woff2)$).*)'
+    '/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)'
   ]
 };
