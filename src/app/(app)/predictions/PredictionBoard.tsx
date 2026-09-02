@@ -70,6 +70,9 @@ export default function PredictionBoard(props: Props) {
   }
 
   const editable = fixtures.filter((f) => lockFor(f) === 'open');
+  /** Fixtures still to kick off — distinguishes "you are committed" from "it is all over". */
+  const notStarted = fixtures.filter((f) => !f.postponed && new Date(f.kickoff) > now).length;
+  const captainMatch = fixtures.find((f) => f.id === captain);
   const complete = fixtures.filter((f) => {
     const p = picks.get(f.id);
     return p && p.home !== null && p.away !== null;
@@ -141,9 +144,30 @@ export default function PredictionBoard(props: Props) {
             but anything you had already saved is locked and you cannot pick a Captain this week.</div>
         </div>
       )}
-      {deadlinePassed && editable.length === 0 && (
+      {/*
+        Two genuinely different situations used to share one message. Anyone who
+        submitted on time saw "every fixture has kicked off" the moment the
+        deadline passed — hours before most of them had — which read as a
+        blanket lockout and made people think something was wrong.
+      */}
+      {deadlinePassed && editable.length === 0 && notStarted > 0 && (
+        <div className="notice info" style={{ margin: '16px 0' }}>
+          <div>
+            <strong>You&apos;re locked in for Gameweek {gameweek}.</strong> Everything was submitted
+            before the deadline, so your picks are final — same as everyone else. Scores appear
+            here as the matches finish.
+            <div style={{ marginTop: 6, fontWeight: 700 }}>
+              {complete} of {fixtures.length} predictions
+              {captainMatch && ` · Captain on ${captainMatch.home_name} v ${captainMatch.away_name}`}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deadlinePassed && editable.length === 0 && notStarted === 0 && (
         <div className="notice warn" style={{ margin: '16px 0' }}>
-          <div><strong>Gameweek {gameweek} is fully locked.</strong> Every fixture has kicked off.</div>
+          <div><strong>Every Gameweek {gameweek} fixture has kicked off.</strong> Points land once
+          the last match is done.</div>
         </div>
       )}
 
