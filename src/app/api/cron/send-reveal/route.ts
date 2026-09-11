@@ -10,6 +10,14 @@ export const maxDuration = 60;
 
 /** How long before the deadline the cards go on the table. */
 const REVEAL_WINDOW_MINUTES = 30;
+/**
+ * Safety net. If the normal window is somehow missed, send anything up to an
+ * hour after the deadline instead — but only if nothing went out for that
+ * gameweek. Late is a poor second to on time; nothing at all is much worse.
+ * By then predictions are locked anyway, so a catch-up send is if anything
+ * fairer than the scheduled one.
+ */
+const CATCHUP_WINDOW_MINUTES = 60;
 
 type Outcome = 'sent' | 'skipped' | 'error';
 
@@ -69,19 +77,41 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    // Reaches an hour back so a missed window can still be rescued.
+    const lookback = new Date(now.getTime() - CATCHUP_WINDOW_MINUTES * 60_000);
     const { data: gameweeks } = await db
       .from('gameweeks').select('id, deadline')
-      .gt('deadline', now.toISOString()).order('deadline').limit(2);
+      .gt('deadline', lookback.toISOString()).order('deadline').limit(3);
 
     const minutesTo = (g: { deadline: string }) =>
       (new Date(g.deadline).getTime() - now.getTime()) / 60000;
 
-    const target = (previewTo || force || dryRun)
-      ? (gameweeks ?? [])[0]                       // next gameweek, whenever it is
-      : (gameweeks ?? []).find((g) => {
+    let mode: 'primary' | 'catchup' | 'manual' = 'manual';
+    let target: { id: number; deadline: string } | undefined;
+
+    if (previewTo || force || dryRun) {
+      target = (gameweeks ?? []).find((g) => minutesTo(g) > 0) ?? (gameweeks ?? [])[0];
+    } else {
+      target = (gameweeks ?? []).find((g) => {
+        const mins = minutesTo(g);
+        return mins > 0 && mins <= REVEAL_WINDOW_MINUTES;
+      });
+      if (target) mode = 'primary';
+
+      if (!target) {
+        // Missed the window? Rescue it, but only if nothing was sent.
+        const lapsed = (gameweeks ?? []).find((g) => {
           const mins = minutesTo(g);
-          return mins > 0 && mins <= REVEAL_WINDOW_MINUTES;
+          return mins <= 0 && mins >= -CATCHUP_WINDOW_MINUTES;
         });
+        if (lapsed) {
+          const { count } = await db.from('email_log')
+            .select('*', { count: 'exact', head: true })
+            .eq('gameweek', lapsed.id).eq('kind', 'reveal');
+          if ((count ?? 0) === 0) { target = lapsed; mode = 'catchup'; }
+        }
+      }
+    }
 
     if (!target) {
       const next = (gameweeks ?? [])[0];
@@ -89,7 +119,8 @@ export async function GET(request: NextRequest) {
         reason: 'not inside the reveal window',
         nextGameweek: next?.id ?? null,
         minutesToNextDeadline: next ? Math.round(minutesTo(next)) : null,
-        windowMinutes: REVEAL_WINDOW_MINUTES
+        windowMinutes: REVEAL_WINDOW_MINUTES,
+        catchupMinutes: CATCHUP_WINDOW_MINUTES
       };
       await logRun(db, 'skipped', detail);
       return NextResponse.json({ ok: true, sent: 0, ...detail });
@@ -191,7 +222,11 @@ export async function GET(request: NextRequest) {
 
       const res = await sendEmail({
         to: t.email,
-        subject: previewTo ? `[PREVIEW] ${revealSubject(data)}` : revealSubject(data),
+        subject: previewTo
+          ? `[PREVIEW] ${revealSubject(data)}`
+          : mode === 'catchup'
+            ? `Everyone's Gameweek ${target.id} predictions`
+            : revealSubject(data),
         html: revealHtml(data),
         text: revealText(data),
         unsubscribeUrl: data.unsubscribeUrl
@@ -214,13 +249,15 @@ export async function GET(request: NextRequest) {
 
     const blocked = claimErrors.length > 0;
     await logRun(db, blocked ? 'error' : 'sent', {
-      gameweek: target.id, eligible: targets.length, sent, alreadySent,
+      mode, gameweek: target.id, eligible: targets.length, sent, alreadySent,
+      minutesToDeadline: Math.round(minutesTo(target)),
       failures: failures.slice(0, 5), claimErrors: claimErrors.slice(0, 5),
       preview: !!previewTo, force
     });
     return NextResponse.json({
       ok: !blocked,
       preview: !!previewTo,
+      mode,
       gameweek: target.id,
       eligible: targets.length,
       sent,
