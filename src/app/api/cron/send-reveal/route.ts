@@ -11,6 +11,25 @@ export const maxDuration = 60;
 /** How long before the deadline the cards go on the table. */
 const REVEAL_WINDOW_MINUTES = 30;
 
+type Outcome = 'sent' | 'skipped' | 'error';
+
+/**
+ * Every run leaves a trace. This job fires six times in a thirty-minute window
+ * once a week; without a record, a failure is invisible until somebody notices
+ * an email that never arrived — which is exactly how it went undiagnosed twice.
+ */
+async function logRun(
+  db: ReturnType<typeof createAdminClient>,
+  outcome: Outcome,
+  detail: Record<string, unknown>
+) {
+  try {
+    await db.from('job_runs').insert({ job: 'reveal', outcome, detail });
+  } catch {
+    // Never let logging break the send.
+  }
+}
+
 /**
  * The pre-match reveal: everyone's predictions, half an hour before kickoff.
  *
@@ -41,6 +60,10 @@ export async function GET(request: NextRequest) {
   const previewTo = url.searchParams.get('preview') === '1'
     ? url.searchParams.get('to')
     : null;
+  /** Reports what would happen and sends nothing. Safe to hit any time. */
+  const dryRun = url.searchParams.get('dryrun') === '1';
+  /** Ignores the time window. For testing the full path on demand. */
+  const force = url.searchParams.get('force') === '1';
   if (url.searchParams.get('preview') === '1' && !previewTo?.includes('@')) {
     return NextResponse.json({ error: 'Preview needs &to=your@email.com' }, { status: 400 });
   }
@@ -50,14 +73,26 @@ export async function GET(request: NextRequest) {
       .from('gameweeks').select('id, deadline')
       .gt('deadline', now.toISOString()).order('deadline').limit(2);
 
-    const target = previewTo
+    const minutesTo = (g: { deadline: string }) =>
+      (new Date(g.deadline).getTime() - now.getTime()) / 60000;
+
+    const target = (previewTo || force || dryRun)
       ? (gameweeks ?? [])[0]                       // next gameweek, whenever it is
       : (gameweeks ?? []).find((g) => {
-          const mins = (new Date(g.deadline).getTime() - now.getTime()) / 60000;
+          const mins = minutesTo(g);
           return mins > 0 && mins <= REVEAL_WINDOW_MINUTES;
         });
+
     if (!target) {
-      return NextResponse.json({ ok: true, sent: 0, reason: 'not inside the reveal window' });
+      const next = (gameweeks ?? [])[0];
+      const detail = {
+        reason: 'not inside the reveal window',
+        nextGameweek: next?.id ?? null,
+        minutesToNextDeadline: next ? Math.round(minutesTo(next)) : null,
+        windowMinutes: REVEAL_WINDOW_MINUTES
+      };
+      await logRun(db, 'skipped', detail);
+      return NextResponse.json({ ok: true, sent: 0, ...detail });
     }
 
     const [{ data: liveTargets, error: tErr }, { data: rows, error: rErr }] = await Promise.all([
@@ -72,8 +107,27 @@ export async function GET(request: NextRequest) {
       ? [{ user_id: 'preview', email: previewTo, display_name: 'Preview' }]
       : liveTargets;
 
+    if (dryRun) {
+      const detail = {
+        dryRun: true,
+        gameweek: target.id,
+        minutesToDeadline: Math.round(minutesTo(target)),
+        wouldReceive: liveTargets?.length ?? 0,
+        predictionsFound: (rows ?? []).length
+      };
+      await logRun(db, 'skipped', detail);
+      return NextResponse.json({ ok: true, sent: 0, ...detail });
+    }
+
     if (!targets?.length) {
-      return NextResponse.json({ ok: true, sent: 0, gameweek: target.id, reason: 'nobody eligible' });
+      const detail = {
+        reason: 'nobody eligible',
+        gameweek: target.id,
+        minutesToDeadline: Math.round(minutesTo(target)),
+        hint: 'reveal_targets requires all predictions in AND a captain set. Check reveal_readiness().'
+      };
+      await logRun(db, 'skipped', detail);
+      return NextResponse.json({ ok: true, sent: 0, ...detail });
     }
 
     // Build the fixture blocks once — identical for every recipient except for
@@ -159,6 +213,11 @@ export async function GET(request: NextRequest) {
     }
 
     const blocked = claimErrors.length > 0;
+    await logRun(db, blocked ? 'error' : 'sent', {
+      gameweek: target.id, eligible: targets.length, sent, alreadySent,
+      failures: failures.slice(0, 5), claimErrors: claimErrors.slice(0, 5),
+      preview: !!previewTo, force
+    });
     return NextResponse.json({
       ok: !blocked,
       preview: !!previewTo,
@@ -176,10 +235,9 @@ export async function GET(request: NextRequest) {
         : undefined
     }, { status: blocked ? 500 : 200 });
   } catch (err) {
+    const message = err instanceof Error ? err.message : 'Reveal run failed';
     console.error('[send-reveal]', err);
-    return NextResponse.json(
-      { ok: false, error: err instanceof Error ? err.message : 'Reveal run failed' },
-      { status: 500 }
-    );
+    await logRun(db, 'error', { message });
+    return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }
