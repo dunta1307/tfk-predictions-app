@@ -136,3 +136,37 @@ export async function removeBot(): Promise<Result> {
   revalidatePath('/admin/players');
   return { ok: true, message: 'Bot removed, along with all its predictions' };
 }
+
+/* --------------------------------------------- player predictions ---- */
+
+/**
+ * Admin overrides. These bypass every deadline and kickoff lock that applies
+ * to players — that is the point of them. Each writes an audit row, and if the
+ * gameweek is already published the points are rebuilt immediately so the
+ * leaderboard can never quietly disagree with the picks.
+ */
+export async function adminSetPrediction(
+  userId: string, fixtureId: number, home: number | null, away: number | null, note?: string
+): Promise<Result> {
+  const supabase = await createClient();
+  const { error } = await supabase.rpc('admin_set_prediction', {
+    p_user: userId, p_fixture: fixtureId, p_home: home, p_away: away, p_note: note ?? null
+  });
+  if (error) return { ok: false, error: clean(error.message) };
+  revalidatePath('/admin/predictions');
+  revalidatePath('/leaderboard');
+  return { ok: true, message: 'Saved' };
+}
+
+export async function adminOverrideCaptain(
+  userId: string, gameweek: number, fixtureId: number | null, note?: string
+): Promise<Result> {
+  const supabase = await createClient();
+  const { error } = await supabase.rpc('admin_override_captain', {
+    p_user: userId, p_gameweek: gameweek, p_fixture: fixtureId, p_note: note ?? null
+  });
+  if (error) return { ok: false, error: clean(error.message) };
+  revalidatePath('/admin/predictions');
+  revalidatePath('/leaderboard');
+  return { ok: true, message: fixtureId ? 'Captain set' : 'Captain cleared' };
+}

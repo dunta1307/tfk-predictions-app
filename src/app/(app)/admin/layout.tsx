@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import SubLink from '@/components/SubLink';
 import { requireAdmin } from '@/lib/admin';
 
 export const dynamic = 'force-dynamic';
@@ -12,11 +12,12 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         see this — everything here is also enforced in the database, not just hidden.</div>
       </div>
       <div className="subtabs">
-        <Link href="/admin" className="subtab">Status</Link>
-        <Link href="/admin/players" className="subtab">Players</Link>
-        <Link href="/admin/results" className="subtab">Results</Link>
-        <Link href="/admin/emails" className="subtab">Emails</Link>
-        <Link href="/admin/bot" className="subtab">Bot</Link>
+        <SubLink href="/admin">Status</SubLink>
+        <SubLink href="/admin/players">Players</SubLink>
+        <SubLink href="/admin/results">Results</SubLink>
+        <SubLink href="/admin/predictions">Picks</SubLink>
+        <SubLink href="/admin/emails">Emails</SubLink>
+        <SubLink href="/admin/bot">Bot</SubLink>
       </div>
       {children}
     </>
